@@ -55,7 +55,17 @@ public class SignalProcessor {
      * @return Background-subtracted image
      */
     public Complex[][] removeBackground(Complex[][] timeFreqImage) {
-        return backgroundSubtractor.removeBackground(timeFreqImage);
+        // Add log before the call
+        Log.d("SONDAR_SignalProc", "Applying background subtraction..."); // Use the specific tag for this class
+
+        // Store the result
+        Complex[][] result = backgroundSubtractor.removeBackground(timeFreqImage);
+
+        // Add log after the call completes
+        Log.d("SONDAR_SignalProc", "Background subtraction complete.");
+
+        // Return the result
+        return result;
     }
 
     /**
@@ -66,6 +76,7 @@ public class SignalProcessor {
      * @return Phase-compensated image
      */
     public float[][] compensatePhase(float[][] rangeDopplerImage, double velocity) {
+        Log.i("SONDAR_SignalProc", "Applying phase compensation (Basic column shift based on velocity: " + String.format("%.4f", velocity) + " m/s). Not MEA.");
         return phaseCompensator.compensate(rangeDopplerImage, velocity);
     }
 

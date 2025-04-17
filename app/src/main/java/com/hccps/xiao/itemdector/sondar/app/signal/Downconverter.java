@@ -1,5 +1,7 @@
 package com.hccps.xiao.itemdector.sondar.app.signal;
 
+import android.util.Log;
+
 import com.hccps.xiao.itemdector.sondar.app.audio.ChirpGenerator;
 import com.hccps.xiao.itemdector.sondar.app.audio.ChirpGenerator.Complex;
 
@@ -21,11 +23,15 @@ public class Downconverter {
      * @return Down-converted baseband signal
      */
     public Complex[] downconvert(Complex[] alignedSignal) {
+
+        Log.d("SONDAR_Downconverter", "Starting downconversion/dechirping..."); // Use a specific tag
         int signalLength = alignedSignal.length;
         Complex[] baseband = new Complex[signalLength];
 
         // Mix with down-chirp to shift to baseband
         // This effectively cancels out the chirp modulation
+        Log.i("SONDAR_Downconverter", "Applying downconversion by multiplying with generated downchirp template (Dechirping).");
+
         for (int i = 0; i < signalLength; i++) {
             if (i < downchirp.length) {
                 baseband[i] = alignedSignal[i].multiply(downchirp[i]);
@@ -33,6 +39,7 @@ public class Downconverter {
                 baseband[i] = new Complex(0, 0);
             }
         }
+        Log.d("SONDAR_Downconverter", "Downconversion/dechirping complete."); // Add at the end
 
         return baseband;
     }
@@ -45,6 +52,7 @@ public class Downconverter {
      * @return 2D FFT matrix representing the frequency-time image
      */
     public Complex[][] createFrequencyTimeImage(Complex[] baseband) {
+        Log.d("SONDAR_Downconverter", "Creating Frequency-Time Image (STFT)...");
         int signalLength = baseband.length;
 
         // Configure sliding window parameters
@@ -55,6 +63,7 @@ public class Downconverter {
         // Create frequency-time image
         Complex[][] timeFreqImage = new Complex[numWindows][windowSize / 2];
 
+        Log.d("SONDAR_Downconverter", "STFT Params: windowSize=" + windowSize + ", windowStep=" + windowStep + ", numWindows=" + numWindows);
         // Apply windowed FFT along the signal
         for (int window = 0; window < numWindows; window++) {
             int startIdx = window * windowStep;
@@ -82,6 +91,7 @@ public class Downconverter {
                 timeFreqImage[window][freq] = fftResult[freq];
             }
         }
+        Log.d("SONDAR_Downconverter", "Frequency-Time Image creation complete."); // Add at the end
 
         return timeFreqImage;
     }
@@ -94,11 +104,19 @@ public class Downconverter {
      * @return 2D range-Doppler image
      */
     public float[][] computeRangeDopplerImage(Complex[][] timeFreqImage) {
+
+
         int timeSteps = timeFreqImage.length;
         int freqBins = timeFreqImage[0].length;
 
+
+
         // Make our dimensions power of 2 for efficient FFT
         int paddedTimeSteps = nextPowerOfTwo(timeSteps);
+
+        Log.d("SONDAR_Downconverter", "Computing Range-Doppler Image...");
+        Log.d("SONDAR_Downconverter", "Input Time-Freq Dims: timeSteps=" + timeSteps + ", freqBins=" + freqBins);
+        Log.d("SONDAR_Downconverter", "Padded Time Steps for FFT: " + paddedTimeSteps);
 
         // Create output image
         float[][] rangeDopplerImage = new float[freqBins][paddedTimeSteps];
@@ -123,6 +141,8 @@ public class Downconverter {
                 rangeDopplerImage[freq][t] = (float) fftResult[t].magnitude();
             }
         }
+        Log.d("SONDAR_Downconverter", "Range-Doppler Image computation complete."); // Add at the end
+
 
         return rangeDopplerImage;
     }

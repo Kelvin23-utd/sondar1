@@ -38,4 +38,7 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
+    implementation("org.opencv:opencv:4.11.0") // Or the latest version
+
+
 }

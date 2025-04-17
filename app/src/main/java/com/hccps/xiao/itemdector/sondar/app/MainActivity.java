@@ -19,8 +19,16 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.hccps.xiao.itemdector.sondar.app.audio.ChirpGenerator.Complex;
+import com.hccps.xiao.itemdector.sondar.app.imaging.ImageConverter;
+import com.hccps.xiao.itemdector.sondar.app.imaging.ShapeRecognizer;
+import com.hccps.xiao.itemdector.sondar.app.utils.SignalLogger;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity implements SondarProcessor.SondarResultCallback {
+    private static final String TAG = "SONDAR_MainActivity";
     private static final int PERMISSION_REQUEST_CODE = 101;
     private static final String[] REQUIRED_PERMISSIONS = new String[]{
             Manifest.permission.RECORD_AUDIO
@@ -31,8 +39,15 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
     private ImageView imageView;
     private TextView statusText;
     private TextView velocityText;
+    private TextView sizeText;
+    private TextView shapeText;
 
     private boolean isRunning = false;
+
+    // Phase 3 components
+    private ImageConverter imageConverter;
+    private ShapeRecognizer shapeRecognizer;
+    private List<Double> distanceList = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -44,6 +59,8 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
         imageView = findViewById(R.id.image_view);
         statusText = findViewById(R.id.status_text);
         velocityText = findViewById(R.id.velocity_text);
+        sizeText = findViewById(R.id.size_text);
+        shapeText = findViewById(R.id.shape_text);
 
         // Set up button click listener
         startStopButton.setOnClickListener(v -> {
@@ -57,10 +74,24 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
         // Create SONDAR processor
         sondarProcessor = new SondarProcessor();
 
+        // Initialize Phase 3 components
+        imageConverter = new ImageConverter();
+        shapeRecognizer = new ShapeRecognizer();
+
         // Check permissions
         if (!hasPermissions()) {
             requestPermissions();
         }
+        startStopButton.setOnClickListener(v -> {
+            if (isRunning) {
+                stopSondar();
+                stopExperiment();
+            } else {
+                startExperiment("velocity_test_" + System.currentTimeMillis());
+                startSondar();
+            }
+        });
+
     }
 
     private boolean hasPermissions() {
@@ -71,6 +102,16 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
             }
         }
         return true;
+    }
+
+    private void startExperiment(String name) {
+        // Create a directory in the app's external files directory
+        File logDir = new File(getExternalFilesDir(null), "sondar_logs");
+        SignalLogger.startExperiment(name, logDir);
+    }
+
+    private void stopExperiment() {
+        SignalLogger.saveExperiment();
     }
 
     private void requestPermissions() {
@@ -107,10 +148,17 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
             return;
         }
 
+        // Clear previous distance measurements
+        distanceList.clear();
+
         sondarProcessor.start(this);
         isRunning = true;
         startStopButton.setText("Stop SONDAR");
         statusText.setText("SONDAR Running");
+
+        // Reset result texts
+        sizeText.setText("Size: Measuring...");
+        shapeText.setText("Shape: Analyzing...");
     }
 
     private void stopSondar() {
@@ -131,12 +179,60 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
     @Override
     public void onResultReady(SondarProcessor.SondarResult result) {
         runOnUiThread(() -> {
-            // Fixed type conversion issue - convert double to float with explicit cast
-            velocityText.setText(String.format("Velocity: %.2f m/s", (float)result.getVelocity()));
+            // Display velocity
+            float velocity = (float)result.getVelocity();
+            velocityText.setText(String.format("Velocity: %.2f m/s", velocity));
+
+            // Store distance for motion parameter estimation
+            double distance = calculateDistanceFromVelocity(velocity);
+            distanceList.add(distance);
 
             // Visualize the range-Doppler image
-            displayRangeDopplerImage(result.getRangeDopplerImage());
+            float[][] rangeDopplerImage = result.getRangeDopplerImage();
+
+            // Only proceed with Phase 3 processing if we have enough data
+            if (rangeDopplerImage != null && distanceList.size() >= 3) {
+                // Step 1: Convert to physical space
+                double[] distanceArray = distanceList.stream().mapToDouble(d -> d).toArray();
+                float[][] physicalImage = imageConverter.convertToPhysicalSpace(rangeDopplerImage, distanceArray);
+
+                // Step 2: Calculate object size
+                if (physicalImage != null) {
+                    double[] size = imageConverter.extractSize(physicalImage, 0.3f);
+                    sizeText.setText(String.format("Size: %.1f x %.1f mm", size[0], size[1]));
+
+                    // Step 3: Recognize shape
+                    ShapeRecognizer.ShapeType shape = shapeRecognizer.recognizeShape(physicalImage, 0.3f);
+                    shapeText.setText("Shape: " + shape.name());
+
+                    // Display the physical space image
+                    displayPhysicalImage(physicalImage);
+                } else {
+                    // If physical image conversion failed, display the range-Doppler image
+                    displayRangeDopplerImage(rangeDopplerImage);
+                }
+            } else {
+                // If we don't have enough data yet, display the range-Doppler image
+                displayRangeDopplerImage(rangeDopplerImage);
+            }
         });
+    }
+
+    /**
+     * Calculate the approximate distance based on velocity measurements
+     * This is used for motion parameter estimation
+     */
+    private double calculateDistanceFromVelocity(float velocity) {
+        // Use the relationship between measured velocity and distance
+        // For a target moving across the device's field of view
+
+        // Start with the default reference distance (30 cm)
+        double referenceDistance = 30.0; // cm
+
+        // Adjust based on current velocity measurement
+        // When target is passing perpendicular, velocity is near zero
+        // When far away, velocity magnitude is higher
+        return referenceDistance + Math.abs(velocity) * 10.0; // Approximate conversion
     }
 
     private void displayRangeDopplerImage(float[][] image) {
@@ -145,7 +241,7 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
         int height = image.length;    // 256
         int width = image[0].length;  // 4
 
-        // Use much larger scaling factors
+        // Use larger scaling factors
         int scaleX = 100;  // Make each column 100px wide
         int scaleY = 3;    // Make each row 3px tall
 
@@ -224,7 +320,7 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
                 velocityValue = Float.parseFloat(velocityStr);
             }
         } catch (NumberFormatException e) {
-            Log.e("SONDAR_DEBUG", "Error parsing velocity: " + velocityStr, e);
+            Log.e(TAG, "Error parsing velocity: " + velocityStr, e);
         }
 
         canvas.drawText("Velocity: " + String.format("%.2f m/s", velocityValue),
@@ -234,8 +330,8 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
         // Get the current LayoutParams (assuming the parent is ConstraintLayout)
         android.view.ViewGroup.LayoutParams currentParams = imageView.getLayoutParams();
 
-// Check if it's already the correct type, otherwise create new ones
-// (Though ideally it should already be ConstraintLayout.LayoutParams if defined in XML)
+        // Check if it's already the correct type, otherwise create new ones
+        // (Though ideally it should already be ConstraintLayout.LayoutParams if defined in XML)
         if (currentParams instanceof androidx.constraintlayout.widget.ConstraintLayout.LayoutParams) {
             androidx.constraintlayout.widget.ConstraintLayout.LayoutParams clParams =
                     (androidx.constraintlayout.widget.ConstraintLayout.LayoutParams) currentParams;
@@ -246,7 +342,7 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
             // Fallback or error handling if the parent isn't a ConstraintLayout unexpectedly.
             // This might indicate an issue in your XML layout.
             // For a simple fix assuming it IS a ConstraintLayout, you could create new params:
-            Log.w("SONDAR_DEBUG", "ImageView LayoutParams were not ConstraintLayout.LayoutParams. Creating new ones.");
+            Log.w(TAG, "ImageView LayoutParams were not ConstraintLayout.LayoutParams. Creating new ones.");
             androidx.constraintlayout.widget.ConstraintLayout.LayoutParams newParams =
                     new androidx.constraintlayout.widget.ConstraintLayout.LayoutParams(width * scaleX, height * scaleY);
 
@@ -259,21 +355,70 @@ public class MainActivity extends AppCompatActivity implements SondarProcessor.S
             newParams.bottomToBottom = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.PARENT_ID;
 
             imageView.setLayoutParams(newParams);
-
-            // Alternatively, log an error and don't change params if the type is wrong:
-            // Log.e("SONDAR_DEBUG", "Cannot set LayoutParams: Parent is not a ConstraintLayout or params are incorrect type.");
         }
 
-// Request layout update after changing params
+        // Request layout update after changing params
         imageView.requestLayout();
 
         imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
         imageView.setImageBitmap(bitmap);
-        imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        imageView.setImageBitmap(bitmap);
 
-        Log.d("SONDAR_DEBUG", "Displaying range-Doppler image: " + width + "x" + height +
+        Log.d(TAG, "Displaying range-Doppler image: " + width + "x" + height +
                 " (scaled to " + (width * scaleX) + "x" + (height * scaleY) + ")");
+    }
+
+    /**
+     * Displays the physical space image
+     */
+    private void displayPhysicalImage(float[][] physicalImage) {
+        if (physicalImage == null || physicalImage.length == 0) return;
+
+        int height = physicalImage.length;
+        int width = physicalImage[0].length;
+
+        // Create a bitmap for display
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        // Fill with black background
+        canvas.drawColor(Color.BLACK);
+
+        // Find max value for normalization
+        float maxValue = 0.001f; // Small non-zero default to avoid division by zero
+        for (int i = 0; i < height; i++) {
+            for (int j = 0; j < width; j++) {
+                maxValue = Math.max(maxValue, physicalImage[i][j]);
+            }
+        }
+
+        // Create paint for drawing
+        Paint paint = new Paint();
+
+        // Normalize and draw the image
+        if (maxValue > 0) {
+            for (int i = 0; i < height; i++) {
+                for (int j = 0; j < width; j++) {
+                    // Normalize the value
+                    float normalizedValue = physicalImage[i][j] / maxValue;
+
+                    // Use enhanced heat map color
+                    int color = getEnhancedHeatMapColor(normalizedValue);
+
+                    // Draw a pixel
+                    paint.setColor(color);
+                    canvas.drawPoint(j, i, paint);
+                }
+            }
+        }
+
+        // Scale the bitmap for display
+        Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, width * 4, height * 4, false);
+
+        // Update ImageView
+        imageView.setImageBitmap(scaledBitmap);
+        imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+
+        Log.d(TAG, "Displaying physical space image: " + width + "x" + height);
     }
 
     // Enhanced heat map with more vibrant colors

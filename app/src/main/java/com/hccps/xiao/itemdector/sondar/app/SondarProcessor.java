@@ -9,6 +9,7 @@ import com.hccps.xiao.itemdector.sondar.app.processing.SignalProcessor;
 import com.hccps.xiao.itemdector.sondar.app.signal.Downconverter;
 import com.hccps.xiao.itemdector.sondar.app.signal.EchoAligner;
 import com.hccps.xiao.itemdector.sondar.app.signal.FFTProcessor;
+import com.hccps.xiao.itemdector.sondar.app.utils.SignalLogger;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -183,21 +184,59 @@ public class SondarProcessor implements SondarAudioManager.AudioDataCallback {
                 Log.d(TAG, "Processing audio data: size=" + dataCopy.length);
                 try {
                     // --- Existing Processing Pipeline ---
+                    // Log the raw signal for the current sample
+                    int sampleIndex = getSampleIndex();
+                    SignalLogger.logRawSignal(dataCopy, sampleIndex);
+
                     // Step 1: Preprocess the signal (bandpass filtering)
                     Complex[] preprocessed = signalProcessor.preprocess(dataCopy);
+                    SignalLogger.logComplexSignal(preprocessed, sampleIndex, "preprocessed");
+
                     // Step 2: Align echoes (compensate for Doppler effects)
                     Complex[] aligned = echoAligner.alignEchoes(preprocessed);
+                    SignalLogger.logComplexSignal(aligned, sampleIndex, "aligned");
+
+                    // Log 2D representation of aligned signal
+                    float[][] alignedImage = convertComplexToFloat2D(aligned);
+                    SignalLogger.log2DImage(alignedImage, sampleIndex, "echo_aligned");
+
                     double velocity = echoAligner.getEstimatedVelocity();
+                    SignalLogger.logVelocityEstimation(velocity, velocity, 0.0, sampleIndex);
+
                     // Step 3: Down-convert to baseband
                     Complex[] baseband = downconverter.downconvert(aligned);
+                    SignalLogger.logComplexSignal(baseband, sampleIndex, "baseband");
+
+                    // Log 2D representation of baseband signal
+                    float[][] basebandImage = convertComplexToFloat2D(baseband);
+                    SignalLogger.log2DImage(basebandImage, sampleIndex, "downconverted");
+
                     // Step 4: Create frequency-time image
                     Complex[][] timeFreqImage = downconverter.createFrequencyTimeImage(baseband);
+
+                    // Log frequency-time image
+                    float[][] freqTimeFloatImage = convertComplex2DToFloat2D(timeFreqImage);
+                    SignalLogger.log2DImage(freqTimeFloatImage, sampleIndex, "freq_time_image");
+
                     // Step 5: Remove background
                     Complex[][] foreground = signalProcessor.removeBackground(timeFreqImage);
+
+                    // Log foreground image
+                    float[][] foregroundFloatImage = convertComplex2DToFloat2D(foreground);
+                    SignalLogger.log2DImage(foregroundFloatImage, sampleIndex, "foreground");
+
                     // Step 6: Compute range-Doppler image
                     float[][] rangeDopplerImage = downconverter.computeRangeDopplerImage(foreground);
+
+                    // Log range-Doppler image
+                    SignalLogger.log2DImage(rangeDopplerImage, sampleIndex, "range_doppler");
+
                     // Step 7: Apply phase compensation
                     float[][] compensated = signalProcessor.compensatePhase(rangeDopplerImage, velocity);
+
+                    // Log final compensated image
+                    SignalLogger.log2DImage(compensated, sampleIndex, "final_image");
+
                     // --- End of Pipeline ---
 
                     // Store results (Consider if access needs synchronization)
@@ -212,11 +251,6 @@ public class SondarProcessor implements SondarAudioManager.AudioDataCallback {
 
                     long duration = (System.nanoTime() - startTime) / 1_000_000; // ms
                     Log.d(TAG, String.format("Processing complete: velocity=%.2f m/s, duration=%d ms", velocity, duration));
-                    // Log details only if needed for debugging
-                    // Log.d("SONDAR_DEBUG", "Preprocessed size: " + preprocessed.length);
-                    // Log.d("SONDAR_DEBUG", "Time-freq image: " + (timeFreqImage != null ? timeFreqImage.length + "x" + timeFreqImage[0].length : "null"));
-                    // Log.d("SONDAR_DEBUG", "Range-Doppler image: " + (rangeDopplerImage != null ? rangeDopplerImage.length + "x" + rangeDopplerImage[0].length : "null"));
-
                 } catch (Exception e) {
                     // Catch specific exceptions if possible for better handling
                     Log.e(TAG, "Error during signal processing task: " + e.getMessage(), e);
@@ -227,6 +261,42 @@ public class SondarProcessor implements SondarAudioManager.AudioDataCallback {
         }
     }
 
+    /**
+     * Helper method to generate a unique sample index.
+     * This could be based on timestamp or a counter.
+     */
+    private int getSampleIndex() {
+        // Simple implementation - could be enhanced for more reliable unique indexes
+        return (int)(System.currentTimeMillis() % 10000);
+    }
+
+    /**
+     * Convert Complex array to 2D float array for visualization
+     */
+    private float[][] convertComplexToFloat2D(Complex[] signal) {
+        float[][] result = new float[1][signal.length];
+        for (int i = 0; i < signal.length; i++) {
+            result[0][i] = (float) signal[i].magnitude();
+        }
+        return result;
+    }
+
+    /**
+     * Convert 2D Complex array to 2D float array for visualization
+     */
+    private float[][] convertComplex2DToFloat2D(Complex[][] image) {
+        if (image == null || image.length == 0) {
+            return new float[0][0];
+        }
+
+        float[][] result = new float[image.length][image[0].length];
+        for (int i = 0; i < image.length; i++) {
+            for (int j = 0; j < image[0].length; j++) {
+                result[i][j] = (float) image[i][j].magnitude();
+            }
+        }
+        return result;
+    }
 
     /**
      * Gets the last processed time-frequency image.
