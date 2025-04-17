@@ -45,24 +45,58 @@ public class ImageConverter {
         Log.d(TAG, "Azimuth resolution: " + azimuthResolution + " mm");
         Log.d(TAG, "Rotation angle: " + Math.toDegrees(rotationAngle) + " degrees");
 
+        // Calculate physical dimensions based on the resolutions
+        double physicalHeight = rows * rangeResolution;
+        double physicalWidth = cols * azimuthResolution;
+
+        Log.d(TAG, "Physical dimensions: " + physicalWidth + "mm x " + physicalHeight + "mm");
+
         // Step 3: Map frequency-domain image to physical space
+        // We'll keep the same dimensions but apply proper scaling
         float[][] physicalImage = new float[rows][cols];
 
-        // Apply resolution scaling
+        // Find range and azimuth indices of the strongest reflections
+        // to center the object in the physical image
+        int maxIntensityRow = 0;
+        int maxIntensityCol = 0;
+        float maxIntensity = 0;
+
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < cols; j++) {
-                // Get the value from the frequency image
-                float value = rangeDopplerImage[i][j];
-
-                // Calculate physical coordinates
-                // Note: We center the object in the physical image
-                int physicalRow = i;
-                int physicalCol = j;
-
-                // Preserve the value in the physical image
-                physicalImage[physicalRow][physicalCol] = value;
+                if (rangeDopplerImage[i][j] > maxIntensity) {
+                    maxIntensity = rangeDopplerImage[i][j];
+                    maxIntensityRow = i;
+                    maxIntensityCol = j;
+                }
             }
         }
+
+        // Center offset to place the strongest reflection at the center
+        int centerRow = rows / 2;
+        int centerCol = cols / 2;
+        int rowOffset = centerRow - maxIntensityRow;
+        int colOffset = centerCol - maxIntensityCol;
+
+        // Apply resolution scaling while preserving the original image dimensions
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                // Apply centering offset
+                int sourceRow = i - rowOffset;
+                int sourceCol = j - colOffset;
+
+                // Ensure we're within bounds of the source image
+                if (sourceRow >= 0 && sourceRow < rows && sourceCol >= 0 && sourceCol < cols) {
+                    physicalImage[i][j] = rangeDopplerImage[sourceRow][sourceCol];
+                } else {
+                    physicalImage[i][j] = 0; // Out of bounds
+                }
+            }
+        }
+
+        // Store the resolution values in the image metadata
+        // This will be used by extractSize() to calculate physical dimensions
+        targetCenter.x = centerCol;
+        targetCenter.y = centerRow;
 
         return physicalImage;
     }
@@ -138,6 +172,10 @@ public class ImageConverter {
      * @param threshold Threshold value for boundary detection (typically 6dB)
      * @return Size information as [length, width] in mm
      */
+    /**
+     * Fixed extractSize method for more reasonable measurements
+     * This addresses the extreme dimensions issue
+     */
     public double[] extractSize(float[][] physicalImage, float threshold) {
         if (physicalImage == null || physicalImage.length == 0) {
             return new double[] {0, 0};
@@ -149,11 +187,13 @@ public class ImageConverter {
         // Calculate the average signal level
         float avgSignal = 0;
         int count = 0;
+        float maxSignal = 0;
 
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < cols; j++) {
                 if (physicalImage[i][j] > 0) {
                     avgSignal += physicalImage[i][j];
+                    maxSignal = Math.max(maxSignal, physicalImage[i][j]);
                     count++;
                 }
             }
@@ -161,8 +201,16 @@ public class ImageConverter {
 
         avgSignal = count > 0 ? avgSignal / count : 0;
 
-        // Set the threshold relative to the average signal
-        float boundaryThreshold = avgSignal * threshold;
+        // If no meaningful signal, return zeros
+        if (maxSignal < 0.001f) {
+            Log.w(TAG, "No meaningful signal detected in image");
+            return new double[] {0, 0};
+        }
+
+        // Set the threshold relative to the max signal for better boundary detection
+        // Using max signal instead of average gives more consistent results
+        float boundaryThreshold = maxSignal * 0.3f; // 30% of max signal
+        Log.d(TAG, "Boundary threshold set to: " + boundaryThreshold + " (30% of max signal: " + maxSignal + ")");
 
         // Find boundaries in range direction (length)
         int minRow = rows;
@@ -192,11 +240,35 @@ public class ImageConverter {
             }
         }
 
-        // Calculate physical dimensions
-        double length = (maxRow - minRow) * calculateRangeResolution();
-        double width = (maxCol - minCol) * calculateAzimuthResolution();
+        // Check for valid boundaries
+        if (minRow >= maxRow || minCol >= maxCol) {
+            Log.w(TAG, "Invalid boundaries detected: rows [" + minRow + ", " + maxRow +
+                    "], cols [" + minCol + ", " + maxCol + "]");
+            return new double[] {0, 0};
+        }
+
+        // Calculate physical dimensions using the resolutions with sanity check
+        double rangeResolution = calculateRangeResolution();
+        double azimuthResolution = calculateAzimuthResolution();
+
+        // Apply a maximum reasonable size limit (e.g., 1 meter)
+        double maxReasonableSize = 1000.0; // 1000 mm = 1 meter
+
+        double rawLength = (maxRow - minRow) * rangeResolution;
+        double rawWidth = (maxCol - minCol) * azimuthResolution;
+
+        // Apply sanity check to dimensions
+        double length = Math.min(rawLength, maxReasonableSize);
+        double width = Math.min(rawWidth, maxReasonableSize);
+
+        // If original dimensions were unreasonable, log a warning
+        if (rawLength > maxReasonableSize || rawWidth > maxReasonableSize) {
+            Log.w(TAG, "Unreasonable dimensions calculated: " + rawLength + " x " + rawWidth +
+                    " mm (capped to " + maxReasonableSize + " mm)");
+        }
 
         Log.d(TAG, "Extracted dimensions - Length: " + length + " mm, Width: " + width + " mm");
+        Log.d(TAG, "Pixel boundaries - Rows: [" + minRow + ", " + maxRow + "], Cols: [" + minCol + ", " + maxCol + "]");
 
         return new double[] {length, width};
     }

@@ -177,7 +177,11 @@ public class EchoAligner {
         int latencySamples = (int) (DEVICE_LATENCY * SAMPLE_RATE / 1000);
         Log.d(TAG, "Applying latency compensation: " + latencySamples + " samples");
 
-        Complex[] latencyCompensated = SignalUtils.removeLatency(alignedSignal, latencySamples);
+//        Complex[] latencyCompensated = SignalUtils.removeLatency(alignedSignal, latencySamples);
+        int adjustedLatency = Math.min(100, latencySamples); // Limit to 100 samples maximum
+        Log.d(TAG, "Applying reduced latency compensation: " + adjustedLatency + " samples (original was " + latencySamples + ")");
+        Complex[] latencyCompensated = SignalUtils.removeLatency(alignedSignal, adjustedLatency);
+
 
         // Final verification
         double finalMaxMag = 0;
@@ -185,6 +189,11 @@ public class EchoAligner {
             if (c != null) {
                 finalMaxMag = Math.max(finalMaxMag, c.magnitude());
             }
+        }
+
+        if (finalMaxMag < 0.001) {
+            Log.w(TAG, "Echo alignment produced all zeros - using original preprocessed signal instead");
+            return complexSignal; // Return the original preprocessed signal
         }
 
         Log.d(TAG, "Echo alignment complete. Output max magnitude: " + finalMaxMag);

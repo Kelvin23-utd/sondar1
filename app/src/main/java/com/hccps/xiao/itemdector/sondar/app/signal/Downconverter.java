@@ -51,19 +51,26 @@ public class Downconverter {
      * @param baseband The down-converted baseband signal
      * @return 2D FFT matrix representing the frequency-time image
      */
+    // In the Downconverter.java file, modify the createFrequencyTimeImage method
+
     public Complex[][] createFrequencyTimeImage(Complex[] baseband) {
         Log.d("SONDAR_Downconverter", "Creating Frequency-Time Image (STFT)...");
         int signalLength = baseband.length;
 
-        // Configure sliding window parameters
+        // Configure sliding window parameters with improved resolution
         int windowSize = 512; // Power of 2 for efficient FFT
-        int windowStep = 128; // 75% overlap between windows
+
+        // CHANGE: Reduce the step size to increase the number of windows
+        int windowStep = 16;  // Was 128, reducing to 32 gives 4x more windows
+
         int numWindows = (signalLength - windowSize) / windowStep + 1;
 
         // Create frequency-time image
         Complex[][] timeFreqImage = new Complex[numWindows][windowSize / 2];
 
-        Log.d("SONDAR_Downconverter", "STFT Params: windowSize=" + windowSize + ", windowStep=" + windowStep + ", numWindows=" + numWindows);
+        Log.d("SONDAR_Downconverter", "STFT Params: windowSize=" + windowSize +
+                ", windowStep=" + windowStep + ", numWindows=" + numWindows);
+
         // Apply windowed FFT along the signal
         for (int window = 0; window < numWindows; window++) {
             int startIdx = window * windowStep;
@@ -91,7 +98,8 @@ public class Downconverter {
                 timeFreqImage[window][freq] = fftResult[freq];
             }
         }
-        Log.d("SONDAR_Downconverter", "Frequency-Time Image creation complete."); // Add at the end
+
+        Log.d("SONDAR_Downconverter", "Frequency-Time Image creation complete.");
 
         return timeFreqImage;
     }
